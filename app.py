@@ -54,6 +54,40 @@ def save_memorized():
     with open(MEMORIZED_FILE, "w", encoding="utf-8") as f:
         json.dump(list(memorized), f, ensure_ascii=False, indent=2)
 
+def save_memorized_to_github():
+    if _secrets_available:
+        token = st.secrets.get("GITHUB_TOKEN")
+        repo = st.secrets.get("GITHUB_REPO")
+        branch = st.secrets.get("GITHUB_BRANCH", "main")
+    else:
+        token, repo, branch = None, None, "main"
+
+    if not token or not repo:
+        return False
+
+    api_url = f"https://api.github.com/repos/{repo}/contents/{MEMORIZED_FILE}"
+    headers = {
+        "Authorization": f"token {token}",
+        "Accept": "application/vnd.github+json",
+    }
+
+    res = requests.get(api_url, headers=headers, params={"ref": branch})
+    sha = res.json().get("sha") if res.status_code == 200 else None
+
+    content_str = json.dumps(list(memorized), ensure_ascii=False, indent=2)
+    content_b64 = base64.b64encode(content_str.encode("utf-8")).decode("utf-8")
+
+    payload = {
+        "message": "覚えた単語を更新（アプリから自動保存）",
+        "content": content_b64,
+        "branch": branch,
+    }
+    if sha:
+        payload["sha"] = sha
+
+    put_res = requests.put(api_url, headers=headers, json=payload)
+    return put_res.status_code in (200, 201)
+
 # ▼words.jsonをGitHubリポジトリ本体に書き込んで、次回起動しても残るようにする
 def save_words_to_github():
     if _secrets_available:
@@ -148,6 +182,7 @@ if len(st.session_state.deck) == 0:
     if st.button("🔄 「覚えた」をリセットして最初からやり直す"):
         memorized.clear()
         save_memorized()
+        save_memorized_to_github()
         st.session_state.deck = make_deck()
         st.session_state.index = 0
         st.rerun()
@@ -164,6 +199,7 @@ if st.button("答えを見る"):
 if st.button("✓ 覚えた（出題から外す）"):
     memorized.add(word)
     save_memorized()
+    save_memorized_to_github()
     next_word()
     st.rerun()
 
