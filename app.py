@@ -6,6 +6,7 @@ import requests
 import streamlit as st
 from openai import OpenAI
 from dotenv import load_dotenv
+from pathlib import Path
 
 WORDS_FILE = "words.json"
 STATS_FILE = "stats.json"
@@ -14,11 +15,14 @@ MEMORIZED_FILE = "memorized.json"
 # ▼.envからAPIキーを読み込む
 load_dotenv()
 
+# ▼secrets.tomlが存在するか確認（ない環境では st.secrets を呼ばない）
+_secrets_available = (
+    (Path.home() / ".streamlit" / "secrets.toml").exists()
+    or (Path(__file__).parent / ".streamlit" / "secrets.toml").exists()
+)
+
 # ▼キーを取得：まずStreamlitのSecrets、なければ.envから
-try:
-    api_key = st.secrets.get("OPENAI_API_KEY", None)
-except FileNotFoundError:
-    api_key = None
+api_key = st.secrets.get("OPENAI_API_KEY", None) if _secrets_available else None
 if not api_key:
     api_key = os.getenv("OPENAI_API_KEY")
 
@@ -52,15 +56,16 @@ def save_memorized():
 
 # ▼words.jsonをGitHubリポジトリ本体に書き込んで、次回起動しても残るようにする
 def save_words_to_github():
-    try:
+    if _secrets_available:
         token = st.secrets.get("GITHUB_TOKEN")
         repo = st.secrets.get("GITHUB_REPO")
         branch = st.secrets.get("GITHUB_BRANCH", "main")
-    except FileNotFoundError:
+    else:
         token, repo, branch = None, None, "main"
 
     if not token or not repo:
-        st.warning("GitHubの保存設定（Secrets）が見つかりません。ローカルには保存されましたが、再起動すると消える可能性があります。")
+        if _secrets_available:
+            st.warning("GitHubの保存設定（Secrets）が見つかりません。ローカルには保存されましたが、再起動すると消える可能性があります。")
         return False
 
     api_url = f"https://api.github.com/repos/{repo}/contents/{WORDS_FILE}"
