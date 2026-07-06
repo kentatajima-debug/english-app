@@ -1,6 +1,8 @@
 import json
 import os
+import base64
 import random
+import requests
 import streamlit as st
 from openai import OpenAI
 from dotenv import load_dotenv
@@ -33,7 +35,41 @@ def save_stats():
     with open(STATS_FILE, "w", encoding="utf-8") as f:
         json.dump(stats, f, ensure_ascii=False, indent=2)
 
-# ▼AIに単語を頼んで words.json に追加する部品（昨日のadd_words.pyの中身）
+# ▼words.jsonをGitHubリポジトリ本体に書き込んで、次回起動しても残るようにする
+def save_words_to_github():
+    token = st.secrets.get("GITHUB_TOKEN")
+    repo = st.secrets.get("GITHUB_REPO")
+    branch = st.secrets.get("GITHUB_BRANCH", "main")
+
+    if not token or not repo:
+        st.warning("GitHubの保存設定（Secrets）が見つかりません。ローカルには保存されましたが、再起動すると消える可能性があります。")
+        return False
+
+    api_url = f"https://api.github.com/repos/{repo}/contents/{WORDS_FILE}"
+    headers = {
+        "Authorization": f"token {token}",
+        "Accept": "application/vnd.github+json",
+    }
+
+    # 今のファイルのSHA（更新には必須）を取得
+    res = requests.get(api_url, headers=headers, params={"ref": branch})
+    sha = res.json().get("sha") if res.status_code == 200 else None
+
+    content_str = json.dumps(words, ensure_ascii=False, indent=2)
+    content_b64 = base64.b64encode(content_str.encode("utf-8")).decode("utf-8")
+
+    payload = {
+        "message": "単語を追加（アプリから自動保存）",
+        "content": content_b64,
+        "branch": branch,
+    }
+    if sha:
+        payload["sha"] = sha
+
+    put_res = requests.put(api_url, headers=headers, json=payload)
+    return put_res.status_code in (200, 201)
+
+# ▼AIに単語を頼んで words.json に追加する部品
 def fetch_new_words():
     existing = "、".join(words.keys())
     prompt = f"""TOEIC900点レベルの英単語を10個、JSON形式で出してください。
@@ -57,6 +93,7 @@ def fetch_new_words():
 
     with open(WORDS_FILE, "w", encoding="utf-8") as f:
         json.dump(words, f, ensure_ascii=False, indent=2)
+    save_words_to_github()
 
     return added
 
@@ -121,8 +158,7 @@ st.write("---")
 if st.button("🤖 AIで単語を追加"):
     with st.spinner("AIに単語を頼んでいます…"):
         added = fetch_new_words()
-    st.success(f"{added}個の新しい単語を追加しました。（合計 {len(words)}語）")
-    # 新しい単語を反映するため、山札を作り直す
+    st.success(f"{added}個の新しい単語を追加しました。（合計 {len(words)}語）GitHubにも保存しました。")
     st.session_state.deck = make_deck()
     st.session_state.index = 0
 
@@ -132,14 +168,12 @@ st.write("---")
 st.subheader("✍️ まとめて単語を追加")
 st.caption("左に英単語、右に意味を入力してください。行は下の＋で増やせます。")
 
-# ▼空の表を用意（最初は5行分）
 if "input_table" not in st.session_state:
     st.session_state.input_table = [{"英単語": "", "意味": ""} for _ in range(5)]
 
-# ▼編集できる表を表示
 edited = st.data_editor(
     st.session_state.input_table,
-    num_rows="dynamic",        # 行を自由に増やせる
+    num_rows="dynamic",
     use_container_width=True,
     column_config={
         "英単語": st.column_config.TextColumn("英単語", width="medium"),
@@ -154,9 +188,9 @@ if st.button("➕ 表の単語をまとめて追加"):
     for row in edited:
         w = str(row.get("英単語", "")).strip()
         m = str(row.get("意味", "")).strip()
-        if w == "" or m == "":        # 空の行は飛ばす
+        if w == "" or m == "":
             continue
-        if w in words:                # すでにある単語は飛ばす
+        if w in words:
             skipped += 1
             continue
         words[w] = m
@@ -167,11 +201,11 @@ if st.button("➕ 表の単語をまとめて追加"):
     else:
         with open(WORDS_FILE, "w", encoding="utf-8") as f:
             json.dump(words, f, ensure_ascii=False, indent=2)
-        msg = f"{added}個の単語を追加しました。（合計 {len(words)}語）"
+        save_words_to_github()
+        msg = f"{added}個の単語を追加しました。（合計 {len(words)}語）GitHubにも保存しました。"
         if skipped > 0:
             msg += f"／重複のため{skipped}個はスキップしました。"
         st.success(msg)
-        # 入力表を空に戻し、山札も作り直す
         st.session_state.input_table = [{"英単語": "", "意味": ""} for _ in range(5)]
         st.session_state.deck = make_deck()
         st.session_state.index = 0
