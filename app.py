@@ -9,12 +9,16 @@ from dotenv import load_dotenv
 
 WORDS_FILE = "words.json"
 STATS_FILE = "stats.json"
+MEMORIZED_FILE = "memorized.json"
 
 # ▼.envからAPIキーを読み込む
 load_dotenv()
 
 # ▼キーを取得：まずStreamlitのSecrets、なければ.envから
-api_key = st.secrets.get("OPENAI_API_KEY", None) if hasattr(st, "secrets") else None
+try:
+    api_key = st.secrets.get("OPENAI_API_KEY", None)
+except FileNotFoundError:
+    api_key = None
 if not api_key:
     api_key = os.getenv("OPENAI_API_KEY")
 
@@ -35,11 +39,25 @@ def save_stats():
     with open(STATS_FILE, "w", encoding="utf-8") as f:
         json.dump(stats, f, ensure_ascii=False, indent=2)
 
+# ▼覚えた単語の記録を読み込む（無ければ空から）
+if os.path.exists(MEMORIZED_FILE):
+    with open(MEMORIZED_FILE, "r", encoding="utf-8") as f:
+        memorized = set(json.load(f))
+else:
+    memorized = set()
+
+def save_memorized():
+    with open(MEMORIZED_FILE, "w", encoding="utf-8") as f:
+        json.dump(list(memorized), f, ensure_ascii=False, indent=2)
+
 # ▼words.jsonをGitHubリポジトリ本体に書き込んで、次回起動しても残るようにする
 def save_words_to_github():
-    token = st.secrets.get("GITHUB_TOKEN")
-    repo = st.secrets.get("GITHUB_REPO")
-    branch = st.secrets.get("GITHUB_BRANCH", "main")
+    try:
+        token = st.secrets.get("GITHUB_TOKEN")
+        repo = st.secrets.get("GITHUB_REPO")
+        branch = st.secrets.get("GITHUB_BRANCH", "main")
+    except FileNotFoundError:
+        token, repo, branch = None, None, "main"
 
     if not token or not repo:
         st.warning("GitHubの保存設定（Secrets）が見つかりません。ローカルには保存されましたが、再起動すると消える可能性があります。")
@@ -97,9 +115,9 @@ def fetch_new_words():
 
     return added
 
-# ▼シャッフルした順番を作る部品
+# ▼シャッフルした順番を作る部品（覚えた単語は除外）
 def make_deck():
-    deck = list(words.keys())
+    deck = [w for w in words.keys() if w not in memorized]
     random.shuffle(deck)
     return deck
 
@@ -120,13 +138,29 @@ def next_word():
         st.session_state.deck = make_deck()
         st.session_state.index = 0
 
+if len(st.session_state.deck) == 0:
+    st.success(f"🎉 全単語（{len(memorized)}語）を覚えました！おめでとうございます！")
+    if st.button("🔄 「覚えた」をリセットして最初からやり直す"):
+        memorized.clear()
+        save_memorized()
+        st.session_state.deck = make_deck()
+        st.session_state.index = 0
+        st.rerun()
+    st.stop()
+
 word = st.session_state.deck[st.session_state.index]
 
-st.caption(f"{st.session_state.index + 1} / {len(st.session_state.deck)}（登録 {len(words)}語）")
+st.caption(f"{st.session_state.index + 1} / {len(st.session_state.deck)}（登録 {len(words)}語 ／ 覚えた {len(memorized)}語）")
 st.header(word)
 
 if st.button("答えを見る"):
     st.success(words[word])
+
+if st.button("✓ 覚えた（出題から外す）"):
+    memorized.add(word)
+    save_memorized()
+    next_word()
+    st.rerun()
 
 st.write("---")
 
